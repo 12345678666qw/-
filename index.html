@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Canvas 烟花 - 单文件版</title>
+  <style>
+    /* 全屏黑色背景，简单提示文字 */
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: #000;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      color: #ddd;
+    }
+
+    #canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      cursor: crosshair;
+    }
+
+    .overlay {
+      position: fixed;
+      left: 12px;
+      bottom: 12px;
+      color: #ddd;
+      background: rgba(0,0,0,0.35);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      pointer-events: none;
+    }
+
+    .credits {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      color: #bbb;
+      background: rgba(0,0,0,0.25);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div class="overlay">
+    <p>点击任意位置发射烟花 • 自动与手动交替发射</p>
+    <p>按 R 重置画布</p>
+  </div>
+  <div class="credits">Single-file fireworks • 保存并打开即可运行</div>
+
+  <script>
+  // Canvas 烟花效果 - 单文件
+  (function () {
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    // 初始画布尺寸（CSS 像素）
+    let cw = window.innerWidth;
+    let ch = window.innerHeight;
+
+    // 设备像素比
+    const DPR = Math.max(1, window.devicePixelRatio || 1);
+
+    function setupCanvasSize() {
+      cw = window.innerWidth;
+      ch = window.innerHeight;
+      canvas.style.width = cw + 'px';
+      canvas.style.height = ch + 'px';
+      canvas.width = Math.floor(cw * DPR);
+      canvas.height = Math.floor(ch * DPR);
+      // 使用 setTransform 确保不会在 resize 时累积缩放
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    }
+
+    setupCanvasSize();
+
+    // 状态
+    let fireworks = [];
+    let particles = [];
+    let hue = 200; // 基础色相
+    let autoTimer = 0;
+
+    // 配置
+    const config = {
+      maxParticles: 600,
+      fireworksPerSecond: 0.8,
+      gravity: 0.15,
+      friction: 0.98,
+      trailLength: 5,
+      particleDecayMin: 0.015,
+      particleDecayMax: 0.03,
+      particleSpeed: 6,
+      particleCount: 90
+    };
+
+    // 工具：随机数
+    function rand(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+
+    // Firework 类（火箭发射）
+    class Firework {
+      constructor(sx, sy, tx, ty, colorHue) {
+        this.x = sx;
+        this.y = sy;
+        this.sx = sx;
+        this.sy = sy;
+        this.tx = tx;
+        this.ty = ty;
+        this.distanceToTarget = Math.hypot(tx - sx, ty - sy);
+        this.distanceTraveled = 0;
+        this.angle = Math.atan2(ty - sy, tx - sx);
+        this.speed = rand(5, 8);
+        this.acceleration = 1.02;
+        this.brightness = rand(50, 70);
+        this.trail = [];
+        for (let i = 0; i < config.trailLength; i++) this.trail.push([this.x, this.y]);
+        this.hue = colorHue;
+      }
+
+      update(index) {
+        this.trail.pop();
+        this.trail.unshift([this.x, this.y]);
+
+        this.speed *= this.acceleration;
+        const vx = Math.cos(this.angle) * this.speed;
+        const vy = Math.sin(this.angle) * this.speed;
+        this.x += vx;
+        this.y += vy;
+
+        this.distanceTraveled = Math.hypot(this.x - this.sx, this.y - this.sy);
+
+        // 到达目标则爆炸
+        if (this.distanceTraveled >= this.distanceToTarget) {
+          createExplosion(this.tx, this.ty, this.hue);
+          fireworks.splice(index, 1);
+        }
+      }
+
+      draw() {
+        ctx.beginPath();
+        const last = this.trail[this.trail.length - 1];
+        ctx.moveTo(last[0], last[1]);
+        ctx.lineTo(this.x, this.y);
+        ctx.strokeStyle = `hsl(${this.hue}, 100%, ${this.brightness}%)`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+
+    // Particle 类（爆炸的粒子）
+    class Particle {
+      constructor(x, y, hue) {
+        this.x = x;
+        this.y = y;
+        this.angle = rand(0, Math.PI * 2);
+        this.speed = rand(1, config.particleSpeed);
+        this.friction = config.friction;
+        this.gravity = config.gravity;
+        this.hue = rand(hue - 20, hue + 20);
+        this.brightness = rand(40, 70);
+        this.alpha = 1;
+        this.decay = rand(config.particleDecayMin, config.particleDecayMax);
+        this.trail = [];
+        for (let i = 0; i < config.trailLength; i++) this.trail.push([this.x, this.y]);
+      }
+
+      update(index) {
+        this.trail.pop();
+        this.trail.unshift([this.x, this.y]);
+
+        this.speed *= this.friction;
+        this.x += Math.cos(this.angle) * this.speed;
+        this.y += Math.sin(this.angle) * this.speed + this.gravity;
+
+        this.alpha -= this.decay;
+        if (this.alpha <= this.decay) {
+          particles.splice(index, 1);
+        }
+      }
+
+      draw() {
+        ctx.beginPath();
+        const last = this.trail[this.trail.length - 1];
+        ctx.moveTo(last[0], last[1]);
+        ctx.lineTo(this.x, this.y);
+        ctx.strokeStyle = `hsla(${this.hue}, 100%, ${this.brightness}%, ${this.alpha})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+
+    // 创建爆炸粒子
+    function createExplosion(x, y, hueAt) {
+      const count = Math.floor(rand(config.particleCount * 0.6, config.particleCount));
+      for (let i = 0; i < count; i++) {
+        if (particles.length < config.maxParticles) {
+          particles.push(new Particle(x, y, hueAt));
+        }
+      }
+    }
+
+    // 发射火箭
+    function launchFirework(targetX, targetY) {
+      const startX = rand(cw * 0.2, cw * 0.8);
+      const startY = ch;
+      fireworks.push(new Firework(startX, startY, targetX, targetY, rand(hue - 40, hue + 40)));
+    }
+
+    // 主循环
+    let lastTime = performance.now();
+    function loop(now) {
+      requestAnimationFrame(loop);
+
+      // 画布淡出以产生轨迹效果
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.globalCompositeOperation = 'lighter';
+
+      // 更新并绘制 fireworks
+      for (let i = fireworks.length - 1; i >= 0; i--) {
+        fireworks[i].draw();
+        fireworks[i].update(i);
+      }
+
+      // 更新并绘制 particles
+      for (let i = particles.length - 1; i >= 0; i--) {
+        particles[i].draw();
+        particles[i].update(i);
+      }
+
+      // 自动发射（间隔由 fireworksPerSecond 控制）
+      // 使用时间增量来更稳定地控制速率
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+      autoTimer += dt;
+      const interval = 1 / config.fireworksPerSecond;
+      if (autoTimer >= interval) {
+        autoTimer = 0;
+        const tx = rand(cw * 0.1, cw * 0.9);
+        const ty = rand(ch * 0.1, ch * 0.5);
+        launchFirework(tx, ty);
+        hue = (hue + rand(8, 20)) % 360;
+      }
+    }
+
+    // 事件监听：点击发射
+    function handlePointer(e) {
+      // 支持 touch 和 mouse
+      let clientX, clientY;
+      if (e.touches && e.touches[0]) {
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+      } else {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      launchFirework(x, y);
+    }
+
+    // 窗口调整
+    function resize() {
+      setupCanvasSize();
+      // 清空数组避免视觉异常
+      fireworks.length = 0;
+      particles.length = 0;
+      // 清屏
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, cw, ch);
+    }
+
+    // 重置画布（按 R）
+    function resetCanvas() {
+      fireworks.length = 0;
+      particles.length = 0;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, cw, ch);
+    }
+
+    // 绑定事件
+    canvas.addEventListener('click', handlePointer);
+    canvas.addEventListener('touchstart', function (e) {
+      e.preventDefault();
+      handlePointer(e);
+    }, { passive: false });
+
+    window.addEventListener('resize', resize);
+    window.addEventListener('keydown', function (e) {
+      if (e.key === 'r' || e.key === 'R') resetCanvas();
+    });
+
+    // 初始化画面为黑色
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, cw, ch);
+
+    // 启动动画
+    requestAnimationFrame(loop);
+  })();
+  </script>
+</body>
+</html>
