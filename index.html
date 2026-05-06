@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RC4 流密码 · 极简暗黑演示</title>
+    <title>secret</title>
     <style>
         * {
             margin: 0;
@@ -332,31 +332,31 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>RC4 流密码</h1>
+            <h1>RC4</h1>
             <div class="subtitle">
-                对称加密 · 流密码 <span>演示</span>
+                对称加密 · 流密码 <span></span>
             </div>
         </div>
 
         <div class="section">
             <label>🔑 密钥</label>
-            <input type="text" id="keyInput" placeholder="输入任意字符串密钥…" value="mySecretKey123">
+            <input type="text" id="keyInput" placeholder="输入任意字符串密钥…" value="myselfSecret">
         </div>
 
         <div class="section">
             <label>📝 明文 / 密文内容</label>
-            <textarea id="dataInput" placeholder="输入文本（支持汉字、Emoji…）">你好，RC4！🌙 Hello, world.</textarea>
+            <textarea id="dataInput" placeholder="输入文本（支持汉字、Emoji…）">偷偷藏起来，哈哈哈</textarea>
         </div>
 
         <div class="button-group">
-            <button id="encryptBtn">🔒 加密</button>
-            <button id="decryptBtn" class="outline">🔓 解密</button>
+            <button id="encryptBtn"> 秘密枷锁</button>
+            <button id="decryptBtn" class="outline"> 钥匙</button>
         </div>
 
         <div class="divider"></div>
 
         <div class="section">
-            <label>📋 输出结果</label>
+            <label> secret</label>
             <div id="outputBox" class="result-area empty">
                 <span class="inline-label">等待操作…</span>
             </div>
@@ -367,17 +367,16 @@
                 <button class="format-btn" data-format="b64">Base64</button>
             </div>
             <div style="display: flex; justify-content: flex-end; margin-top: 0.8rem;">
-                <button id="copyBtn" class="outline" style="padding:0.5rem 1.2rem; font-size:0.8rem; border-radius:10px;">📋 复制结果</button>
+                <button id="copyBtn" class="outline" style="padding:0.5rem 1.2rem; font-size:0.8rem; border-radius:10px;">偷偷拿走</button>
             </div>
         </div>
         <div class="footer-note">
-            RC4 算法已因安全性问题被淘汰，此页面仅用于学习其原理。实际生产请使用 AES-GCM 或 ChaCha20-Poly1305。
         </div>
     </div>
 
     <script>
         (function() {
-            // ---------- RC4 核心 ----------
+          
             function rc4(keyBytes, dataBytes) {
                 const S = new Array(256);
                 for (let i = 0; i < 256; i++) S[i] = i;
@@ -437,7 +436,7 @@
                 return decoder.decode(bytes);
             }
 
-            // ---------- DOM 元素 ----------
+            
             const keyInput = document.getElementById('keyInput');
             const dataInput = document.getElementById('dataInput');
             const encryptBtn = document.getElementById('encryptBtn');
@@ -447,7 +446,6 @@
             const formatToggle = document.getElementById('formatToggle');
             const formatBtns = formatToggle.querySelectorAll('.format-btn');
 
-            // 状态
             let currentCipherBytes = null;  // 存储密文字节数组
             let currentFormat = 'hex';      // 当前显示格式
 
@@ -480,7 +478,7 @@
                     .replace(/'/g, '&#039;');
             }
 
-            // 根据当前格式渲染密文
+            
             function renderCipher() {
                 if (!currentCipherBytes) {
                     setEmptyOutput();
@@ -497,7 +495,7 @@
                 setOutput(text);
             }
 
-            // 格式化按钮切换
+            
             formatBtns.forEach(btn => {
                 btn.addEventListener('click', () => {
                     formatBtns.forEach(b => b.classList.remove('active'));
@@ -527,7 +525,7 @@
 
             // 黑色弹窗
             function showModal(title, content) {
-                // 移除已有弹窗
+               
                 const existing = document.querySelector('.modal-overlay');
                 if (existing) existing.remove();
 
@@ -563,10 +561,10 @@
                     if (!keyStr) { setOutput('请输入密钥', 'error'); return; }
                     if (!inputText) { setOutput('请输入密文（十六进制）', 'error'); return; }
 
-                    // 仅支持十六进制输入解密（保持简洁）
+                    
                     const hexRegex = /^[0-9a-fA-F\s]+$/;
                     if (!hexRegex.test(inputText)) {
-                        setOutput('密文需要是十六进制字符串（例如：75 ca 3f c1 a5 48）', 'error');
+                        setOutput('用十六进制字符串吧（例如：75 ca 3f c1 a5 48）', 'error');
                         return;
                     }
 
@@ -576,33 +574,32 @@
                     const decryptedText = bytesToUTF8(decryptedBytes);
 
                     // 弹窗显示解密结果
-                    showModal('🔓 解密结果', decryptedText);
-                    // 不清空输出区域，可以保留之前的密文展示（但可以附加提示）
-                    // 注：不改变 currentCipherBytes
+                    showModal('secret', decryptedText);
+                    
                 } catch (e) {
-                    setOutput('解密失败: ' + e.message, 'error');
+                    setOutput('这个secret不能知道哦' + e.message, 'error');
                 }
             });
 
-            // 复制当前输出内容
+            // 复制当秘密
             copyBtn.addEventListener('click', () => {
                 const textToCopy = outputBox.textContent || '';
                 if (!textToCopy || outputBox.classList.contains('empty')) {
-                    alert('没有可复制的结果');
+                    alert('没有偷的的结果哦');
                     return;
                 }
                 navigator.clipboard.writeText(textToCopy).then(() => {
                     const originalText = copyBtn.textContent;
-                    copyBtn.textContent = '✅ 已复制';
+                    copyBtn.textContent = '已拿走';
                     copyBtn.style.borderColor = '#ffffff';
                     setTimeout(() => {
                         copyBtn.textContent = originalText;
                         copyBtn.style.borderColor = '#444';
                     }, 1500);
-                }).catch(() => alert('复制失败，请手动复制'));
+                }).catch(() => alert('拿走失败，这个秘密你把握不住'));
             });
 
-            // Ctrl+Enter 快捷加密
+            // Ctrl+Enter 
             dataInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && e.ctrlKey) {
                     e.preventDefault();
@@ -610,7 +607,7 @@
                 }
             });
 
-            // 初始状态
+            
             setEmptyOutput();
         })();
     </script>
