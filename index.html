@@ -1,314 +1,618 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Canvas 烟花 - 单文件版</title>
-  <style>
-    /* 全屏黑色背景，简单提示文字 */
-    html, body {
-      height: 100%;
-      margin: 0;
-      padding: 0;
-      background: #000;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-      -webkit-font-smoothing: antialiased;
-      -moz-osx-font-smoothing: grayscale;
-      color: #ddd;
-    }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RC4 流密码 · 极简暗黑演示</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-    #canvas {
-      display: block;
-      width: 100vw;
-      height: 100vh;
-      cursor: crosshair;
-    }
+        body {
+            background: #0a0a0a;
+            font-family: 'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            color: #e0e0e0;
+            padding: 1.5rem;
+        }
 
-    .overlay {
-      position: fixed;
-      left: 12px;
-      bottom: 12px;
-      color: #ddd;
-      background: rgba(0,0,0,0.35);
-      padding: 8px 12px;
-      border-radius: 8px;
-      font-size: 13px;
-      pointer-events: none;
-    }
+        .container {
+            width: 100%;
+            max-width: 680px;
+            background: #111111;
+            border: 1px solid #2a2a2a;
+            border-radius: 24px;
+            padding: 2.5rem 2rem;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+        }
 
-    .credits {
-      position: fixed;
-      right: 12px;
-      bottom: 12px;
-      color: #bbb;
-      background: rgba(0,0,0,0.25);
-      padding: 8px 12px;
-      border-radius: 8px;
-      font-size: 12px;
-      pointer-events: none;
-    }
-  </style>
+        .header {
+            margin-bottom: 2.5rem;
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            font-weight: 500;
+            letter-spacing: -0.5px;
+            color: #ffffff;
+            margin-bottom: 0.3rem;
+        }
+
+        .header .subtitle {
+            font-size: 0.9rem;
+            color: #999;
+            font-weight: 400;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .header .subtitle span {
+            background: #1e1e1e;
+            padding: 0.2rem 0.7rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            color: #ccc;
+            border: 1px solid #333;
+        }
+
+        .section {
+            margin-bottom: 1.8rem;
+        }
+
+        label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: #ccc;
+            margin-bottom: 0.5rem;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+        }
+
+        input,
+        textarea {
+            width: 100%;
+            padding: 0.9rem 1rem;
+            font-size: 0.95rem;
+            font-family: inherit;
+            border: 1px solid #2a2a2a;
+            border-radius: 14px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            transition: all 0.2s ease;
+            outline: none;
+            resize: vertical;
+        }
+
+        input:focus,
+        textarea:focus {
+            border-color: #ffffff;
+            background: #222;
+            box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.05);
+        }
+
+        textarea {
+            min-height: 90px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 0.8rem;
+            flex-wrap: wrap;
+            margin-top: 0.8rem;
+        }
+
+        button {
+            padding: 0.85rem 1.5rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            border-radius: 14px;
+            border: 1px solid #ffffff;
+            background: #ffffff;
+            color: #000;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.3rem;
+        }
+
+        button.outline {
+            background: transparent;
+            color: #ffffff;
+            border: 1px solid #444;
+        }
+
+        button.outline:hover {
+            background: #1e1e1e;
+            border-color: #ffffff;
+        }
+
+        button:hover {
+            background: #e0e0e0;
+            border-color: #e0e0e0;
+        }
+
+        button.outline:hover {
+            background: #1e1e1e;
+        }
+
+        .format-toggle {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.8rem;
+            flex-wrap: wrap;
+        }
+
+        .format-btn {
+            padding: 0.4rem 1rem;
+            font-size: 0.8rem;
+            border-radius: 10px;
+            border: 1px solid #333;
+            background: transparent;
+            color: #aaa;
+            cursor: pointer;
+            transition: all 0.2s;
+            letter-spacing: 0.3px;
+            font-weight: 500;
+        }
+
+        .format-btn.active {
+            background: #ffffff;
+            color: #000;
+            border-color: #ffffff;
+        }
+
+        .result-area {
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 14px;
+            padding: 1rem 1.2rem;
+            min-height: 70px;
+            word-break: break-all;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+            font-size: 0.9rem;
+            color: #d0d0d0;
+            line-height: 1.5;
+            transition: all 0.2s ease;
+        }
+
+        .result-area.empty {
+            color: #666;
+            font-family: inherit;
+            font-style: italic;
+        }
+
+        .inline-label {
+            font-weight: 500;
+            margin-right: 0.5rem;
+            color: #999;
+            font-style: normal;
+            font-family: inherit;
+        }
+
+        .divider {
+            border-top: 1px solid #222;
+            margin: 1.8rem 0 1.2rem 0;
+        }
+
+        .footer-note {
+            font-size: 0.75rem;
+            color: #666;
+            text-align: center;
+            margin-top: 1.5rem;
+            letter-spacing: 0.2px;
+        }
+
+        /* 黑色弹窗 */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            animation: fadeIn 0.2s ease;
+        }
+
+        .modal-dialog {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 20px;
+            padding: 2rem 2rem 1.5rem;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
+            color: #e0e0e0;
+            animation: slideUp 0.25s ease;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.2rem;
+        }
+
+        .modal-header h3 {
+            font-size: 1.3rem;
+            font-weight: 500;
+            color: #fff;
+        }
+
+        .modal-close {
+            background: none;
+            border: 1px solid #444;
+            color: #ccc;
+            font-size: 1.2rem;
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+        }
+
+        .modal-close:hover {
+            background: #fff;
+            color: #000;
+            border-color: #fff;
+        }
+
+        .modal-body {
+            background: #111;
+            border: 1px solid #2a2a2a;
+            border-radius: 14px;
+            padding: 1.2rem;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 1rem;
+            word-break: break-all;
+            max-height: 300px;
+            overflow-y: auto;
+            color: #d0d0d0;
+            line-height: 1.6;
+            margin-bottom: 1rem;
+        }
+
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .modal-footer button {
+            padding: 0.6rem 1.5rem;
+            font-size: 0.85rem;
+            border-radius: 12px;
+            background: #fff;
+            color: #000;
+            border: none;
+            cursor: pointer;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        @media (max-width: 500px) {
+            .container {
+                padding: 1.8rem 1.2rem;
+            }
+            .button-group {
+                flex-direction: column;
+            }
+            .format-toggle {
+                justify-content: center;
+            }
+        }
+    </style>
 </head>
 <body>
-  <canvas id="canvas"></canvas>
-  <div class="overlay">
-    <p>点击任意位置发射烟花 • 自动与手动交替发射</p>
-    <p>按 R 重置画布</p>
-  </div>
-  <div class="credits">Single-file fireworks • 保存并打开即可运行</div>
+    <div class="container">
+        <div class="header">
+            <h1>RC4 流密码</h1>
+            <div class="subtitle">
+                对称加密 · 流密码 <span>演示</span>
+            </div>
+        </div>
 
-  <script>
-  // Canvas 烟花效果 - 单文件
-  (function () {
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
+        <div class="section">
+            <label>🔑 密钥</label>
+            <input type="text" id="keyInput" placeholder="输入任意字符串密钥…" value="mySecretKey123">
+        </div>
 
-    // 初始画布尺寸（CSS 像素）
-    let cw = window.innerWidth;
-    let ch = window.innerHeight;
+        <div class="section">
+            <label>📝 明文 / 密文内容</label>
+            <textarea id="dataInput" placeholder="输入文本（支持汉字、Emoji…）">你好，RC4！🌙 Hello, world.</textarea>
+        </div>
 
-    // 设备像素比
-    const DPR = Math.max(1, window.devicePixelRatio || 1);
+        <div class="button-group">
+            <button id="encryptBtn">🔒 加密</button>
+            <button id="decryptBtn" class="outline">🔓 解密</button>
+        </div>
 
-    function setupCanvasSize() {
-      cw = window.innerWidth;
-      ch = window.innerHeight;
-      canvas.style.width = cw + 'px';
-      canvas.style.height = ch + 'px';
-      canvas.width = Math.floor(cw * DPR);
-      canvas.height = Math.floor(ch * DPR);
-      // 使用 setTransform 确保不会在 resize 时累积缩放
-      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    }
+        <div class="divider"></div>
 
-    setupCanvasSize();
+        <div class="section">
+            <label>📋 输出结果</label>
+            <div id="outputBox" class="result-area empty">
+                <span class="inline-label">等待操作…</span>
+            </div>
+            <div class="format-toggle" id="formatToggle">
+                <button class="format-btn" data-format="bin">2 进制</button>
+                <button class="format-btn" data-format="oct">8 进制</button>
+                <button class="format-btn active" data-format="hex">16 进制</button>
+                <button class="format-btn" data-format="b64">Base64</button>
+            </div>
+            <div style="display: flex; justify-content: flex-end; margin-top: 0.8rem;">
+                <button id="copyBtn" class="outline" style="padding:0.5rem 1.2rem; font-size:0.8rem; border-radius:10px;">📋 复制结果</button>
+            </div>
+        </div>
+        <div class="footer-note">
+            RC4 算法已因安全性问题被淘汰，此页面仅用于学习其原理。实际生产请使用 AES-GCM 或 ChaCha20-Poly1305。
+        </div>
+    </div>
 
-    // 状态
-    let fireworks = [];
-    let particles = [];
-    let hue = 200; // 基础色相
-    let autoTimer = 0;
+    <script>
+        (function() {
+            // ---------- RC4 核心 ----------
+            function rc4(keyBytes, dataBytes) {
+                const S = new Array(256);
+                for (let i = 0; i < 256; i++) S[i] = i;
+                let j = 0;
+                const keyLen = keyBytes.length;
+                for (let i = 0; i < 256; i++) {
+                    j = (j + S[i] + keyBytes[i % keyLen]) & 0xFF;
+                    [S[i], S[j]] = [S[j], S[i]];
+                }
 
-    // 配置
-    const config = {
-      maxParticles: 600,
-      fireworksPerSecond: 0.8,
-      gravity: 0.15,
-      friction: 0.98,
-      trailLength: 5,
-      particleDecayMin: 0.015,
-      particleDecayMax: 0.03,
-      particleSpeed: 6,
-      particleCount: 90
-    };
+                let i = 0;
+                j = 0;
+                const result = new Uint8Array(dataBytes.length);
+                for (let idx = 0; idx < dataBytes.length; idx++) {
+                    i = (i + 1) & 0xFF;
+                    j = (j + S[i]) & 0xFF;
+                    [S[i], S[j]] = [S[j], S[i]];
+                    const K = S[(S[i] + S[j]) & 0xFF];
+                    result[idx] = dataBytes[idx] ^ K;
+                }
+                return result;
+            }
 
-    // 工具：随机数
-    function rand(min, max) {
-      return Math.random() * (max - min) + min;
-    }
+            function toUTF8Bytes(str) {
+                return new TextEncoder().encode(str);
+            }
 
-    // Firework 类（火箭发射）
-    class Firework {
-      constructor(sx, sy, tx, ty, colorHue) {
-        this.x = sx;
-        this.y = sy;
-        this.sx = sx;
-        this.sy = sy;
-        this.tx = tx;
-        this.ty = ty;
-        this.distanceToTarget = Math.hypot(tx - sx, ty - sy);
-        this.distanceTraveled = 0;
-        this.angle = Math.atan2(ty - sy, tx - sx);
-        this.speed = rand(5, 8);
-        this.acceleration = 1.02;
-        this.brightness = rand(50, 70);
-        this.trail = [];
-        for (let i = 0; i < config.trailLength; i++) this.trail.push([this.x, this.y]);
-        this.hue = colorHue;
-      }
+            function bytesToHex(bytes) {
+                return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
+            }
 
-      update(index) {
-        this.trail.pop();
-        this.trail.unshift([this.x, this.y]);
+            function bytesToBinary(bytes) {
+                return Array.from(bytes).map(b => b.toString(2).padStart(8, '0')).join(' ');
+            }
 
-        this.speed *= this.acceleration;
-        const vx = Math.cos(this.angle) * this.speed;
-        const vy = Math.sin(this.angle) * this.speed;
-        this.x += vx;
-        this.y += vy;
+            function bytesToOctal(bytes) {
+                return Array.from(bytes).map(b => b.toString(8).padStart(3, '0')).join(' ');
+            }
 
-        this.distanceTraveled = Math.hypot(this.x - this.sx, this.y - this.sy);
+            function bytesToBase64(bytes) {
+                const binaryStr = Array.from(bytes).map(b => String.fromCharCode(b)).join('');
+                return btoa(binaryStr);
+            }
 
-        // 到达目标则爆炸
-        if (this.distanceTraveled >= this.distanceToTarget) {
-          createExplosion(this.tx, this.ty, this.hue);
-          fireworks.splice(index, 1);
-        }
-      }
+            function hexToBytes(hex) {
+                const cleanHex = hex.replace(/\s/g, '');
+                if (cleanHex.length % 2 !== 0) throw new Error('无效的十六进制字符串');
+                const bytes = new Uint8Array(cleanHex.length / 2);
+                for (let i = 0; i < bytes.length; i++) {
+                    bytes[i] = parseInt(cleanHex.substr(i * 2, 2), 16);
+                }
+                return bytes;
+            }
 
-      draw() {
-        ctx.beginPath();
-        const last = this.trail[this.trail.length - 1];
-        ctx.moveTo(last[0], last[1]);
-        ctx.lineTo(this.x, this.y);
-        ctx.strokeStyle = `hsl(${this.hue}, 100%, ${this.brightness}%)`;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-    }
+            function bytesToUTF8(bytes) {
+                const decoder = new TextDecoder('utf-8', { fatal: false });
+                return decoder.decode(bytes);
+            }
 
-    // Particle 类（爆炸的粒子）
-    class Particle {
-      constructor(x, y, hue) {
-        this.x = x;
-        this.y = y;
-        this.angle = rand(0, Math.PI * 2);
-        this.speed = rand(1, config.particleSpeed);
-        this.friction = config.friction;
-        this.gravity = config.gravity;
-        this.hue = rand(hue - 20, hue + 20);
-        this.brightness = rand(40, 70);
-        this.alpha = 1;
-        this.decay = rand(config.particleDecayMin, config.particleDecayMax);
-        this.trail = [];
-        for (let i = 0; i < config.trailLength; i++) this.trail.push([this.x, this.y]);
-      }
+            // ---------- DOM 元素 ----------
+            const keyInput = document.getElementById('keyInput');
+            const dataInput = document.getElementById('dataInput');
+            const encryptBtn = document.getElementById('encryptBtn');
+            const decryptBtn = document.getElementById('decryptBtn');
+            const outputBox = document.getElementById('outputBox');
+            const copyBtn = document.getElementById('copyBtn');
+            const formatToggle = document.getElementById('formatToggle');
+            const formatBtns = formatToggle.querySelectorAll('.format-btn');
 
-      update(index) {
-        this.trail.pop();
-        this.trail.unshift([this.x, this.y]);
+            // 状态
+            let currentCipherBytes = null;  // 存储密文字节数组
+            let currentFormat = 'hex';      // 当前显示格式
 
-        this.speed *= this.friction;
-        this.x += Math.cos(this.angle) * this.speed;
-        this.y += Math.sin(this.angle) * this.speed + this.gravity;
+            function setOutput(text, type = 'normal') {
+                outputBox.classList.remove('empty');
+                if (type === 'error') {
+                    outputBox.innerHTML = `<span style="color:#ff6b6b;">⚠️ ${escapeHTML(text)}</span>`;
+                } else {
+                    outputBox.innerHTML = `<span class="inline-label">${getFormatLabel()}</span> ${escapeHTML(text)}`;
+                }
+            }
 
-        this.alpha -= this.decay;
-        if (this.alpha <= this.decay) {
-          particles.splice(index, 1);
-        }
-      }
+            function setEmptyOutput() {
+                outputBox.classList.add('empty');
+                outputBox.innerHTML = '<span class="inline-label">等待操作…</span>';
+                currentCipherBytes = null;
+            }
 
-      draw() {
-        ctx.beginPath();
-        const last = this.trail[this.trail.length - 1];
-        ctx.moveTo(last[0], last[1]);
-        ctx.lineTo(this.x, this.y);
-        ctx.strokeStyle = `hsla(${this.hue}, 100%, ${this.brightness}%, ${this.alpha})`;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-    }
+            function getFormatLabel() {
+                const labels = { bin: '二进制:', oct: '八进制:', hex: '十六进制:', b64: 'Base64:' };
+                return labels[currentFormat] || '';
+            }
 
-    // 创建爆炸粒子
-    function createExplosion(x, y, hueAt) {
-      const count = Math.floor(rand(config.particleCount * 0.6, config.particleCount));
-      for (let i = 0; i < count; i++) {
-        if (particles.length < config.maxParticles) {
-          particles.push(new Particle(x, y, hueAt));
-        }
-      }
-    }
+            function escapeHTML(str) {
+                return String(str)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#039;');
+            }
 
-    // 发射火箭
-    function launchFirework(targetX, targetY) {
-      const startX = rand(cw * 0.2, cw * 0.8);
-      const startY = ch;
-      fireworks.push(new Firework(startX, startY, targetX, targetY, rand(hue - 40, hue + 40)));
-    }
+            // 根据当前格式渲染密文
+            function renderCipher() {
+                if (!currentCipherBytes) {
+                    setEmptyOutput();
+                    return;
+                }
+                let text;
+                switch (currentFormat) {
+                    case 'bin': text = bytesToBinary(currentCipherBytes); break;
+                    case 'oct': text = bytesToOctal(currentCipherBytes); break;
+                    case 'hex': text = bytesToHex(currentCipherBytes); break;
+                    case 'b64': text = bytesToBase64(currentCipherBytes); break;
+                    default: text = bytesToHex(currentCipherBytes);
+                }
+                setOutput(text);
+            }
 
-    // 主循环
-    let lastTime = performance.now();
-    function loop(now) {
-      requestAnimationFrame(loop);
+            // 格式化按钮切换
+            formatBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    formatBtns.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    currentFormat = btn.dataset.format;
+                    renderCipher();
+                });
+            });
 
-      // 画布淡出以产生轨迹效果
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-      ctx.fillRect(0, 0, cw, ch);
-      ctx.globalCompositeOperation = 'lighter';
+            // 加密
+            encryptBtn.addEventListener('click', () => {
+                try {
+                    const keyStr = keyInput.value;
+                    const plaintext = dataInput.value;
+                    if (!keyStr) { setOutput('请输入密钥', 'error'); return; }
+                    if (!plaintext) { setOutput('请输入明文内容', 'error'); return; }
 
-      // 更新并绘制 fireworks
-      for (let i = fireworks.length - 1; i >= 0; i--) {
-        fireworks[i].draw();
-        fireworks[i].update(i);
-      }
+                    const keyBytes = toUTF8Bytes(keyStr);
+                    const plainBytes = toUTF8Bytes(plaintext);
+                    currentCipherBytes = rc4(keyBytes, plainBytes);
+                    renderCipher();
+                } catch (e) {
+                    setOutput('加密失败: ' + e.message, 'error');
+                    currentCipherBytes = null;
+                }
+            });
 
-      // 更新并绘制 particles
-      for (let i = particles.length - 1; i >= 0; i--) {
-        particles[i].draw();
-        particles[i].update(i);
-      }
+            // 黑色弹窗
+            function showModal(title, content) {
+                // 移除已有弹窗
+                const existing = document.querySelector('.modal-overlay');
+                if (existing) existing.remove();
 
-      // 自动发射（间隔由 fireworksPerSecond 控制）
-      // 使用时间增量来更稳定地控制速率
-      const dt = (now - lastTime) / 1000;
-      lastTime = now;
-      autoTimer += dt;
-      const interval = 1 / config.fireworksPerSecond;
-      if (autoTimer >= interval) {
-        autoTimer = 0;
-        const tx = rand(cw * 0.1, cw * 0.9);
-        const ty = rand(ch * 0.1, ch * 0.5);
-        launchFirework(tx, ty);
-        hue = (hue + rand(8, 20)) % 360;
-      }
-    }
+                const overlay = document.createElement('div');
+                overlay.className = 'modal-overlay';
+                overlay.innerHTML = `
+                    <div class="modal-dialog">
+                        <div class="modal-header">
+                            <h3>${escapeHTML(title)}</h3>
+                            <button class="modal-close">✕</button>
+                        </div>
+                        <div class="modal-body">${escapeHTML(content)}</div>
+                        <div class="modal-footer">
+                            <button class="modal-close-btn">关闭</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(overlay);
 
-    // 事件监听：点击发射
-    function handlePointer(e) {
-      // 支持 touch 和 mouse
-      let clientX, clientY;
-      if (e.touches && e.touches[0]) {
-        clientX = e.touches[0].clientX;
-        clientY = e.touches[0].clientY;
-      } else {
-        clientX = e.clientX;
-        clientY = e.clientY;
-      }
-      const rect = canvas.getBoundingClientRect();
-      const x = clientX - rect.left;
-      const y = clientY - rect.top;
-      launchFirework(x, y);
-    }
+                const closeModal = () => overlay.remove();
+                overlay.querySelector('.modal-close').addEventListener('click', closeModal);
+                overlay.querySelector('.modal-close-btn').addEventListener('click', closeModal);
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) closeModal();
+                });
+            }
 
-    // 窗口调整
-    function resize() {
-      setupCanvasSize();
-      // 清空数组避免视觉异常
-      fireworks.length = 0;
-      particles.length = 0;
-      // 清屏
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, cw, ch);
-    }
+            // 解密
+            decryptBtn.addEventListener('click', () => {
+                try {
+                    const keyStr = keyInput.value;
+                    const inputText = dataInput.value.trim();
+                    if (!keyStr) { setOutput('请输入密钥', 'error'); return; }
+                    if (!inputText) { setOutput('请输入密文（十六进制）', 'error'); return; }
 
-    // 重置画布（按 R）
-    function resetCanvas() {
-      fireworks.length = 0;
-      particles.length = 0;
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, cw, ch);
-    }
+                    // 仅支持十六进制输入解密（保持简洁）
+                    const hexRegex = /^[0-9a-fA-F\s]+$/;
+                    if (!hexRegex.test(inputText)) {
+                        setOutput('密文需要是十六进制字符串（例如：75 ca 3f c1 a5 48）', 'error');
+                        return;
+                    }
 
-    // 绑定事件
-    canvas.addEventListener('click', handlePointer);
-    canvas.addEventListener('touchstart', function (e) {
-      e.preventDefault();
-      handlePointer(e);
-    }, { passive: false });
+                    const cipherBytes = hexToBytes(inputText);
+                    const keyBytes = toUTF8Bytes(keyStr);
+                    const decryptedBytes = rc4(keyBytes, cipherBytes);
+                    const decryptedText = bytesToUTF8(decryptedBytes);
 
-    window.addEventListener('resize', resize);
-    window.addEventListener('keydown', function (e) {
-      if (e.key === 'r' || e.key === 'R') resetCanvas();
-    });
+                    // 弹窗显示解密结果
+                    showModal('🔓 解密结果', decryptedText);
+                    // 不清空输出区域，可以保留之前的密文展示（但可以附加提示）
+                    // 注：不改变 currentCipherBytes
+                } catch (e) {
+                    setOutput('解密失败: ' + e.message, 'error');
+                }
+            });
 
-    // 初始化画面为黑色
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, cw, ch);
+            // 复制当前输出内容
+            copyBtn.addEventListener('click', () => {
+                const textToCopy = outputBox.textContent || '';
+                if (!textToCopy || outputBox.classList.contains('empty')) {
+                    alert('没有可复制的结果');
+                    return;
+                }
+                navigator.clipboard.writeText(textToCopy).then(() => {
+                    const originalText = copyBtn.textContent;
+                    copyBtn.textContent = '✅ 已复制';
+                    copyBtn.style.borderColor = '#ffffff';
+                    setTimeout(() => {
+                        copyBtn.textContent = originalText;
+                        copyBtn.style.borderColor = '#444';
+                    }, 1500);
+                }).catch(() => alert('复制失败，请手动复制'));
+            });
 
-    // 启动动画
-    requestAnimationFrame(loop);
-  })();
-  </script>
+            // Ctrl+Enter 快捷加密
+            dataInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && e.ctrlKey) {
+                    e.preventDefault();
+                    encryptBtn.click();
+                }
+            });
+
+            // 初始状态
+            setEmptyOutput();
+        })();
+    </script>
 </body>
 </html>
