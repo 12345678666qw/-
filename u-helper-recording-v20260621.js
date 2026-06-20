@@ -75,92 +75,79 @@
         navigator.mediaDevices.getUserMedia = async function (constraints) {
             if (constraints.audio && G.__autoPlayRecordEnabled && !isProcessingVirtualMic) {
                 var sampleAudio = findSampleAudio(currentRecordButton);
-                var wavBlob = audioBlobCache.get(currentQuestionContainer);
+                isProcessingVirtualMic = true;
 
-                if (wavBlob) {
-                    isProcessingVirtualMic = true;
-                    console.log('[核心] 正在构建虚拟音频流...');
+                // ── 方案3: 优先用页面原始<audio>元素，零转换零损失 ──
+                if (sampleAudio && sampleAudio.src && !sampleAudio._uhSourceUsed) {
+                    try {
+                        console.log('[满分管道] 使用原始音频元素直出（方案3）:', sampleAudio.src.substring(0,80));
+                        var audioCtx3 = new (window.AudioContext || window.webkitAudioContext)();
+                        var srcNode = audioCtx3.createMediaElementSource(sampleAudio);
+                        sampleAudio._uhSourceUsed = true;
+                        var destNode = audioCtx3.createMediaStreamDestination();
+                        srcNode.connect(destNode);
 
-                    var audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    var arrayBuffer = await wavBlob.arrayBuffer();
-                    var audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                        // 静默推流，不连扬声器（不发出声音）
+                        sampleAudio.currentTime = 0;
+                        sampleAudio.play().catch(function(e) {
+                            console.warn('[满分管道] audio.play()需要用户交互，降级');
+                        });
 
-                    var sourceNode = audioContext.createBufferSource();
-                    sourceNode.buffer = audioBuffer;
-
-                    var destinationNode = audioContext.createMediaStreamDestination();
-                    sourceNode.connect(destinationNode);
-                    sourceNode.connect(audioContext.destination);
-
-                    var delay = 800;
-                    setTimeout(function () {
-                        sourceNode.start(0);
-                        console.log('[核心] 虚拟音频开始推送');
-
-                        var totalDuration = (audioBuffer.duration * 1000) + 1000;
+                        var dur3 = (sampleAudio.duration || 2) * 1000 + 1500;
                         setTimeout(function () {
                             autoStopRecording();
                             isProcessingVirtualMic = false;
-                            audioContext.close();
-                        }, totalDuration);
-                    }, delay);
+                            audioCtx3.close();
+                        }, dur3);
 
-                    return destinationNode.stream;
+                        console.log('[满分管道] ✅ 方案3启动，时长=', Math.round(dur3), 'ms');
+                        return destNode.stream;
+                    } catch(e3) {
+                        console.warn('[满分管道] 方案3失败:', e3.message, '→ 降级方案2');
+                        isProcessingVirtualMic = false;
+                    }
                 }
+
+                // ── 方案2: 无损管道，存原始blob，不解码不重采样 ──
+                var rawBlob = audioBlobCache.get(currentQuestionContainer);
+                if (rawBlob) {
+                    console.log('[满分管道] 方案2无损管道，原始blob大小=', rawBlob.size, 'bytes');
+                    var audioCtx2 = new (window.AudioContext || window.webkitAudioContext)();
+                    var arrayBuf = await rawBlob.arrayBuffer();
+                    var audioBuf = await audioCtx2.decodeAudioData(arrayBuf);
+
+                    var bufSrc = audioCtx2.createBufferSource();
+                    bufSrc.buffer = audioBuf;
+                    var dest2 = audioCtx2.createMediaStreamDestination();
+                    bufSrc.connect(dest2);
+                    bufSrc.connect(audioCtx2.destination);
+
+                    var delay2 = 800;
+                    setTimeout(function () {
+                        bufSrc.start(0);
+                        console.log('[满分管道] 方案2无损推流开始');
+                        var dur2 = (audioBuf.duration * 1000) + 1000;
+                        setTimeout(function () {
+                            autoStopRecording();
+                            isProcessingVirtualMic = false;
+                            audioCtx2.close();
+                        }, dur2);
+                    }, delay2);
+
+                    return dest2.stream;
+                }
+
+                isProcessingVirtualMic = false;
             }
             return originalGetUserMedia(constraints);
         };
     }
 
-    // ── extractWordFromUrl ────────────────────────────────────
-    // 从CDN URL提取单词: "1_catalog.mp3" → "catalog"
-    function extractWordFromUrl(audioUrl) {
-        try {
-            var filename = audioUrl.split('/').pop().split('?')[0].split('#')[0];
-            // 去掉数字前缀和下划线: "1_catalog.mp3" → "catalog"
-            var name = filename.replace(/\.[^.]+$/, '');  // 去扩展名
-            var match = name.match(/^\d+_(.+)$/);          // 去数字前缀
-            if (match) name = match[1];
-            // 只保留纯英文单词
-            if (/^[a-zA-Z]+$/.test(name) && name.length > 1) {
-                return name.toLowerCase();
-            }
-        } catch(e) {}
-        return null;
-    }
-
-    // ── generateTTSBlob ───────────────────────────────────────
-    // 使用 Google Translate TTS 生成高质量单词发音
-    async function generateTTSBlob(word) {
-        var ttsUrl = 'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=' + encodeURIComponent(word);
-        console.log('[TTS] 生成发音:', word, '→', ttsUrl);
-        var resp = await fetch(ttsUrl);
-        if (!resp.ok) throw new Error('TTS fetch failed: ' + resp.status);
-        return await resp.blob();
-    }
-
     // ── downloadAndSaveAudio ──────────────────────────────────
     async function downloadAndSaveAudio(audioUrl, recordButton) {
         try {
-            // 🔧 TTS模式: 词汇题使用TTS生成替代CDN音频
-            var word = extractWordFromUrl(audioUrl);
-            var blob;
-            if (word) {
-                try {
-                    console.log('[TTS] 尝试TTS生成:', word);
-                    blob = await generateTTSBlob(word);
-                    console.log('[TTS] ✅ TTS生成成功，大小:', blob.size, 'bytes');
-                } catch(ttsErr) {
-                    console.warn('[TTS] TTS失败，回退CDN:', ttsErr.message);
-                    console.log('[自动播放录制器] 下载示例音频:', audioUrl);
-                    var cdnResp = await fetch(audioUrl);
-                    blob = await cdnResp.blob();
-                }
-            } else {
-                console.log('[自动播放录制器] 下载示例音频:', audioUrl);
-                var cdnResp2 = await fetch(audioUrl);
-                blob = await cdnResp2.blob();
-            }
+            console.log('[自动播放录制器] 下载示例音频:', audioUrl);
+            var blob = await fetch(audioUrl).then(function(r) { return r.blob(); });
             var wavBlob = await convertToWAV(blob);
 
             recordedAudioBlob = wavBlob;
@@ -172,8 +159,9 @@
                                         recordButton.closest('.question-vocabulary');
                 if (questionContainer) {
                     audioCache.set(questionContainer, recordedAudioUrl);
-                    audioBlobCache.set(questionContainer, wavBlob);
-                    console.log('[自动播放录制器] ✅ 音频已保存到当前题目');
+                    // 🔧 方案2: 存原始blob（不解码不重采样），getUserMedia里直接用
+                    audioBlobCache.set(questionContainer, blob);
+                    console.log('[自动播放录制器] ✅ 音频已保存（原始blob=' + blob.size + 'bytes, 供方案2使用）');
                 }
             }
 
