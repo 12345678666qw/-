@@ -77,37 +77,6 @@
                 var sampleAudio = findSampleAudio(currentRecordButton);
                 isProcessingVirtualMic = true;
 
-                // ── 方案3: 优先用页面原始<audio>元素，零转换零损失 ──
-                if (sampleAudio && sampleAudio.src && !sampleAudio._uhSourceUsed) {
-                    try {
-                        console.log('[满分管道] 使用原始音频元素直出（方案3）:', sampleAudio.src.substring(0,80));
-                        var audioCtx3 = new (window.AudioContext || window.webkitAudioContext)();
-                        var srcNode = audioCtx3.createMediaElementSource(sampleAudio);
-                        sampleAudio._uhSourceUsed = true;
-                        var destNode = audioCtx3.createMediaStreamDestination();
-                        srcNode.connect(destNode);
-
-                        // 静默推流，不连扬声器（不发出声音）
-                        sampleAudio.currentTime = 0;
-                        sampleAudio.play().catch(function(e) {
-                            console.warn('[满分管道] audio.play()需要用户交互，降级');
-                        });
-
-                        var dur3 = (sampleAudio.duration || 2) * 1000 + 1500;
-                        setTimeout(function () {
-                            autoStopRecording();
-                            isProcessingVirtualMic = false;
-                            audioCtx3.close();
-                        }, dur3);
-
-                        console.log('[满分管道] ✅ 方案3启动，时长=', Math.round(dur3), 'ms');
-                        return destNode.stream;
-                    } catch(e3) {
-                        console.warn('[满分管道] 方案3失败:', e3.message, '→ 降级方案2');
-                        isProcessingVirtualMic = false;
-                    }
-                }
-
                 // ── 方案2: 无损管道，存原始blob，不解码不重采样 ──
                 var rawBlob = audioBlobCache.get(currentQuestionContainer);
                 if (rawBlob) {
@@ -120,19 +89,19 @@
                     bufSrc.buffer = audioBuf;
                     var dest2 = audioCtx2.createMediaStreamDestination();
                     bufSrc.connect(dest2);
-                    bufSrc.connect(audioCtx2.destination);
 
-                    var delay2 = 800;
+                    // 立即开始推流，无延迟
+                    bufSrc.loop = false;
+                    bufSrc.start(0);
+                    console.log('[满分管道] 方案2无损推流开始，buf时长=', audioBuf.duration.toFixed(2), 's');
+
+                    var dur2 = (audioBuf.duration * 1000) + 1500;
                     setTimeout(function () {
-                        bufSrc.start(0);
-                        console.log('[满分管道] 方案2无损推流开始');
-                        var dur2 = (audioBuf.duration * 1000) + 1000;
-                        setTimeout(function () {
-                            autoStopRecording();
-                            isProcessingVirtualMic = false;
-                            audioCtx2.close();
-                        }, dur2);
-                    }, delay2);
+                        bufSrc.stop();
+                        autoStopRecording();
+                        isProcessingVirtualMic = false;
+                        audioCtx2.close();
+                    }, dur2);
 
                     return dest2.stream;
                 }
@@ -595,8 +564,14 @@
 
         try {
             recordButton.setAttribute('data-auto-handled', 'true');
-            showRecordNotification('🎤 词汇录音开始...', 'info');
 
+            // 🔧 预下载：在点击录音按钮前先把音频缓存好，确保getUserMedia时blob已就绪
+            var _sampleAudio = findSampleAudio(recordButton);
+            if (_sampleAudio && _sampleAudio.src) {
+                await downloadAndSaveAudio(_sampleAudio.src, recordButton);
+            }
+
+            showRecordNotification('🎤 词汇录音开始...', 'info');
             recordButton.click();
 
             var settingDuration = G.__recordDuration || 3;
