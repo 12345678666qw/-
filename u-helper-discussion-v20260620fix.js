@@ -846,28 +846,22 @@
     }
 
     // ============================================================
-    // fillTextarea — React 兼容的 textarea 填写
+    // fillTextarea — React 兼容的 textarea 填写 (保持卖家原版逻辑)
     // ============================================================
     async function fillTextarea(textarea, text) {
         try {
             textarea.focus();
             await sleep(300 + Math.random() * 300);
 
-            // 原生设值
-            var nativeSetter = Object.getOwnPropertyDescriptor(
+            var nativeTextareaSetter = Object.getOwnPropertyDescriptor(
                 window.HTMLTextAreaElement.prototype, 'value'
             ).set;
-            nativeSetter.call(textarea, text);
-
-            // InputEvent 触发 React onChange（优先用 page context 的构造器绕过 isTrusted）
-            var IE = (typeof unsafeWindow !== 'undefined' && unsafeWindow.InputEvent) || (typeof InputEvent !== 'undefined' ? InputEvent : null);
-            if (IE) {
-                textarea.dispatchEvent(new IE('input', { bubbles: true, inputType: 'insertText', data: text, cancelable: true }));
-            }
+            nativeTextareaSetter.call(textarea, text);
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
             textarea.dispatchEvent(new Event('change', { bubbles: true }));
 
             await sleep(200);
-            // 不调 blur — U校园 handleBlurReply 会清空 replyInfo 导致按钮重新 disabled
+            textarea.dispatchEvent(new Event('blur', { bubbles: true }));
 
             _logger.debug('[UHelperDiscussion] 已输入评论:', text.substring(0, 50) + (text.length > 50 ? '...' : ''));
             return true;
@@ -997,6 +991,7 @@
     function _forceSaveAnswer(textarea) {
         try {
             if (!textarea || !textarea.value) return false;
+            // 确保 DOM 值已写入（React 组件可能读到旧 state，但 saveAnswer 读 DOM）
             var bbs = document.querySelector('[id^="uai-bbs-"]');
             if (!bbs) return false;
             var k = Object.keys(bbs).find(function(k){return k.startsWith('__reactFiber')||k.startsWith('__reactInternalInstance')});
@@ -1126,14 +1121,11 @@
             }
 
             commentTextArea.focus();
-            var nativeSetter = Object.getOwnPropertyDescriptor(
+            var nativeSetter2 = Object.getOwnPropertyDescriptor(
                 window.HTMLTextAreaElement.prototype, 'value'
             ).set;
-            nativeSetter.call(commentTextArea, commentText);
-            var IE = (typeof unsafeWindow !== 'undefined' && unsafeWindow.InputEvent) || (typeof InputEvent !== 'undefined' ? InputEvent : null);
-            if (IE) {
-                commentTextArea.dispatchEvent(new IE('input', { bubbles: true, inputType: 'insertText', data: commentText, cancelable: true }));
-            }
+            nativeSetter2.call(commentTextArea, commentText);
+            commentTextArea.dispatchEvent(new Event('input', { bubbles: true }));
             commentTextArea.dispatchEvent(new Event('change', { bubbles: true }));
 
             _logger.debug('[UHelperDiscussion] handleGenericCommentSection: 已输入评论:',
@@ -1263,7 +1255,7 @@
         switchRow.appendChild(switchEl);
         card.appendChild(switchRow);
 
-        // ── 2.评论模式 select ────────────────────────────────
+        // ── 2. 评论模式 select ────────────────────────────────
         var modeRow = document.createElement('div');
         modeRow.className = 'u-helper-input-row';
 
