@@ -1263,7 +1263,7 @@
         switchRow.appendChild(switchEl);
         card.appendChild(switchRow);
 
-        // ── 2. 评论模式 select ────────────────────────────────
+        // ── 2.评论模式 select ────────────────────────────────
         var modeRow = document.createElement('div');
         modeRow.className = 'u-helper-input-row';
 
