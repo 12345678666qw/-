@@ -631,17 +631,18 @@
                                    document.querySelector('.oral-score');
 
                 if (scoreElement && scoreElement.textContent.trim() && scoreElement.textContent.trim() !== '') {
-                    var score = scoreElement.textContent.trim();
-                    console.log('[挂机录音] ✅ 检测到分数: ' + score);
-                    showRecordNotification('📊 得分: ' + score, 'success');
-                    resolve(true);
+                    var scoreText = scoreElement.textContent.trim();
+                    var scoreNum = parseInt(scoreText, 10);
+                    console.log('[挂机录音] ✅ 检测到分数: ' + scoreNum);
+                    showRecordNotification('📊 得分: ' + scoreNum, 'success');
+                    resolve(isNaN(scoreNum) ? scoreText : scoreNum);
                     return;
                 }
 
                 waitedTime += checkInterval;
                 if (waitedTime >= maxWaitTime) {
                     console.warn('[挂机录音] ⚠️ 等待分数超时 (可能是网络卡顿或未检测到)');
-                    resolve(false);
+                    resolve(null);
                     return;
                 }
 
