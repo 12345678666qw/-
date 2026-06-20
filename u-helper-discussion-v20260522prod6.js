@@ -381,39 +381,6 @@
     }
 
     // ============================================================
-    // _extractMaterialOnly — 提取材料文本，剔除讨论回复区
-    // ============================================================
-    function _extractMaterialOnly(el) {
-        if (!el) return '';
-        try {
-            // 克隆节点，避免修改原始 DOM
-            var clone = el.cloneNode(true);
-            // 移除讨论回复区（避免把其他学生的评论当背景材料喂给 AI）
-            var replySelectors = [
-                '.discussion-cloud-recordList',
-                '.discussion-cloud-recordList-content',
-                '.discussion-cloud-recordList-content-scroll',
-                '.discussion-cloud-recordList-item',
-                '.discussion-cloud-recordList-content-pagination',
-                '.reply', '.reply-child', '.reply-content', '.reply-body',
-                '.comment-item', '.comment-body', '.comment-content',
-                '.item-content',
-                '.btns-submit', '.discussion-cloud-bottom'
-            ];
-            replySelectors.forEach(function (sel) {
-                var nodes = clone.querySelectorAll(sel);
-                for (var i = 0; i < nodes.length; i++) {
-                    if (nodes[i].parentNode) nodes[i].parentNode.removeChild(nodes[i]);
-                }
-            });
-            return clone.textContent.trim();
-        } catch (e) {
-            // 降级：直接返回原始 textContent
-            return el.textContent.trim();
-        }
-    }
-
-    // ============================================================
     // waitForDiscussionElements — 等待讨论区 DOM 加载
     // ============================================================
     async function waitForDiscussionElements(maxWaitMs, pollInterval) {
@@ -441,8 +408,7 @@
                 || document.querySelector('.text-material-wrapper');
 
             var titleText = titleEl ? titleEl.textContent.trim() : '';
-            // 🔧 FIX: 过滤掉讨论回复区，避免 AI 把其他学生评论当"背景材料"引用
-            var contentText = _extractMaterialOnly(contentEl);
+            var contentText = contentEl ? contentEl.textContent.trim() : '';
 
             if (titleText || contentText) {
                 _logger.debug('[UHelperDiscussion] 讨论区元素已就绪 (第' + attempts + '次轮询, 耗时' + (Date.now() - startTime) + 'ms)');
@@ -462,8 +428,7 @@
             || document.querySelector('.text-material-wrapper');
 
         var finalTitle = titleEl ? titleEl.textContent.trim() : '';
-        // 🔧 FIX: 同样过滤讨论回复区
-        var finalContent = _extractMaterialOnly(contentEl);
+        var finalContent = contentEl ? contentEl.textContent.trim() : '';
 
         if (!finalTitle && !finalContent) {
             _logger.warn('[UHelperDiscussion] 等待超时，讨论区元素仍未加载完成');
@@ -590,9 +555,7 @@
     function getExistingComments() {
         var comments = [];
         try {
-            // 🔧 适配 U校园实际 DOM：.discussion-cloud-recordList-item > .reply > .item-content > .content
             var containerSelectors = [
-                '.discussion-cloud-recordList-item',
                 '.discussion-cloud-recordList-content',
                 '.reply-child',
                 '.reply-content',
@@ -624,7 +587,7 @@
                     var containers = document.querySelectorAll(fallbackSelectors[j]);
                     containers.forEach(function (container) {
                         var items = container.querySelectorAll(
-                            '.discussion-cloud-recordList-item, .reply, .comment-item, .reply-item, .comment-body, .reply-body, [class*="comment"], [class*="reply"]'
+                            '.comment-item, .reply-item, .comment-body, .reply-body, [class*="comment"], [class*="reply"]'
                         );
                         if (items.length === 0) {
                             var text = extractCommentTextFromElement(container);
@@ -668,22 +631,6 @@
     }
 
     // ============================================================
-    // _safeDefault — 兜底保护：无自定义默认评论时拒绝填写
-    // ============================================================
-    function _safeDefault(reason) {
-        if (!localStorage.getItem('u-default-comment')) {
-            _logger.warn('[UHelperDiscussion] ' + (reason || '所有模式均失败') + '，且未设置默认评论 → 拒绝填写');
-            // 只有 default 模式才弹 toast，ai/copy/rewrite 模式失败由主脚本兜底
-            var mode = localStorage.getItem('u-discussion-mode') || 'default';
-            if (mode === 'default' && typeof _ctx.safeToast === 'function') {
-                _ctx.safeToast('⚠️ 请先在设置中填写默认评论文本', 'warning');
-            }
-            return null;
-        }
-        return localStorage.getItem('u-default-comment');
-    }
-
-    // ============================================================
     // generateComment — 生成评论内容（v4 重写）
     // ============================================================
     async function generateComment(titleText, contentText) {
@@ -693,14 +640,6 @@
         try {
             // ── mode: default ──
             if (config.mode === 'default') {
-                // 🔧 没有自定义默认评论 → 拒绝使用硬编码 fallback，提示用户设置
-                if (!localStorage.getItem('u-default-comment')) {
-                    _logger.warn('[UHelperDiscussion] 默认评论模式但未设置默认评论文本');
-                    if (typeof _ctx.safeToast === 'function') {
-                        _ctx.safeToast('⚠️ 请先在设置中填写默认评论文本', 'warning');
-                    }
-                    return null;
-                }
                 _logger.debug('[UHelperDiscussion] 模式: default，使用默认评论');
                 return defaultComment;
             }
@@ -716,14 +655,14 @@
                     }
                 }
                 _logger.debug('[UHelperDiscussion] 模式: copy，无可用评论，fallback 到 default');
-                return _safeDefault('copy模式无可用评论');
+                return defaultComment;
             }
 
             // ── mode: ai ──
             if (config.mode === 'ai') {
                 if (!(titleText || contentText)) {
                     _logger.debug('[UHelperDiscussion] 未找到讨论内容，使用默认评论');
-                    return _safeDefault('AI模式无讨论内容');
+                    return defaultComment;
                 }
 
                 _logger.debug('[UHelperDiscussion] 模式: ai，使用AI生成评论...');
@@ -749,7 +688,7 @@
                     _logger.debug('[UHelperDiscussion] AI未返回有效内容，使用默认评论');
                 }
 
-                return _safeDefault('AI模式返回无效');
+                return defaultComment;
             }
 
             // ── mode: rewrite（真正改写模式）──
@@ -775,7 +714,7 @@
                         }
                     }
                     _logger.debug('[UHelperDiscussion] rewrite fallback 也失败，使用默认评论');
-                    return _safeDefault('rewrite→AI fallback失败');
+                    return defaultComment;
                 }
 
                 // 2. 随机选一条源评论
@@ -831,16 +770,16 @@
 
                 // 7. 最终 fallback
                 _logger.debug('[UHelperDiscussion] 所有 AI 尝试都失败，使用默认评论');
-                return _safeDefault('rewrite所有尝试均失败');
+                return defaultComment;
             }
 
             // 未知模式 fallback
             _logger.warn('[UHelperDiscussion] 未知模式:', config.mode, '，使用默认评论');
-            return _safeDefault('未知模式:' + config.mode);
+            return defaultComment;
 
         } catch (e) {
             _logger.error('[UHelperDiscussion] generateComment 异常:', e);
-            return _safeDefault('generateComment异常:' + (e.message || e));
+            return defaultComment;
         }
     }
 
