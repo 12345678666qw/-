@@ -13,6 +13,7 @@
 
 (function () {
     'use strict';
+    console.log('[DISC-MODULE] IIFE start');
 
     // ── 模块上下文（由 init 注入）──────────────────────────────
     var _ctx = {};
@@ -852,14 +853,21 @@
             textarea.focus();
             await sleep(300 + Math.random() * 300);
 
-            var nativeTextareaSetter = Object.getOwnPropertyDescriptor(
+            // 原生设值
+            var nativeSetter = Object.getOwnPropertyDescriptor(
                 window.HTMLTextAreaElement.prototype, 'value'
             ).set;
-            nativeTextareaSetter.call(textarea, text);
-            textarea.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text, cancelable: true }));
+            nativeSetter.call(textarea, text);
+
+            // InputEvent 触发 React onChange（优先用 page context 的构造器绕过 isTrusted）
+            var IE = (typeof unsafeWindow !== 'undefined' && unsafeWindow.InputEvent) || (typeof InputEvent !== 'undefined' ? InputEvent : null);
+            if (IE) {
+                textarea.dispatchEvent(new IE('input', { bubbles: true, inputType: 'insertText', data: text, cancelable: true }));
+            }
             textarea.dispatchEvent(new Event('change', { bubbles: true }));
 
             await sleep(200);
+            // 不调 blur — U校园 handleBlurReply 会清空 replyInfo 导致按钮重新 disabled
 
             _logger.debug('[UHelperDiscussion] 已输入评论:', text.substring(0, 50) + (text.length > 50 ? '...' : ''));
             return true;
@@ -880,7 +888,7 @@
             }
 
             var waitCount = 0;
-            while (submitButton.disabled && waitCount < 50) {
+            while (submitButton.disabled && waitCount < 15) {
                 await sleep(200);
                 waitCount++;
             }
@@ -984,6 +992,31 @@
     }
 
     // ============================================================
+    // _forceSaveAnswer — 直调 U校园 React 组件的 saveAnswer（兜底）
+    // ============================================================
+    function _forceSaveAnswer(textarea) {
+        try {
+            if (!textarea || !textarea.value) return false;
+            var bbs = document.querySelector('[id^="uai-bbs-"]');
+            if (!bbs) return false;
+            var k = Object.keys(bbs).find(function(k){return k.startsWith('__reactFiber')||k.startsWith('__reactInternalInstance')});
+            if (!k) return false;
+            var f = bbs[k], d = 0, comp = null;
+            while (f && d < 30) {
+                if (f.stateNode && typeof f.stateNode.saveAnswer === 'function') { comp = f.stateNode; break; }
+                f = f.return; d++;
+            }
+            if (!comp) return false;
+            comp.saveAnswer();
+            _logger.debug('[UHelperDiscussion] saveAnswer 已调用');
+            return true;
+        } catch(e) {
+            _logger.error('[UHelperDiscussion] _forceSaveAnswer 异常:', e);
+            return false;
+        }
+    }
+
+    // ============================================================
     // handleDiscussionPage
     // ============================================================
     async function handleDiscussionPage() {
@@ -997,14 +1030,6 @@
 
             if (hasSubmittedCurrentDiscussion()) {
                 _logger.debug('[UHelperDiscussion] handleDiscussionPage: 当前讨论区本轮已处理过，跳过');
-                return false;
-            }
-
-            var discussionRoot = document.querySelector('.discussion-cloud-bottom') || document;
-            var submitButton = findSubmitButton(discussionRoot);
-
-            if (!submitButton) {
-                _logger.debug('[UHelperDiscussion] handleDiscussionPage: 未找到发布按钮，跳过');
                 return false;
             }
 
@@ -1026,8 +1051,23 @@
             }
             setState('filled', '已填入评论');
 
-            await sleep(500 + Math.random() * 500);
+            await sleep(300);
+            // 🔧 填完后再找按钮，避免React重渲染导致引用失效
+            var discussionRoot = document.querySelector('.discussion-cloud-bottom, .ds-discussion-bottom') || document;
+            var submitButton = findSubmitButton(discussionRoot);
+            if (!submitButton) {
+                _logger.debug('[UHelperDiscussion] handleDiscussionPage: 未找到发布按钮，跳过');
+                setState('failed', '未找到发布按钮');
+                return false;
+            }
+
+            await sleep(200 + Math.random() * 300);
             var clicked = await submitComment(submitButton);
+            if (!clicked) {
+                // 🔧 按钮持续 disabled → 直调 U校园 React 组件 saveAnswer
+                _logger.debug('[UHelperDiscussion] 按钮未激活，尝试直调 saveAnswer');
+                clicked = _forceSaveAnswer(textarea);
+            }
             if (clicked) {
                 _logger.debug('[UHelperDiscussion] handleDiscussionPage: 评论已提交');
                 markCurrentDiscussionSubmitted();
@@ -1090,7 +1130,10 @@
                 window.HTMLTextAreaElement.prototype, 'value'
             ).set;
             nativeSetter.call(commentTextArea, commentText);
-            commentTextArea.dispatchEvent(new Event('input', { bubbles: true }));
+            var IE = (typeof unsafeWindow !== 'undefined' && unsafeWindow.InputEvent) || (typeof InputEvent !== 'undefined' ? InputEvent : null);
+            if (IE) {
+                commentTextArea.dispatchEvent(new IE('input', { bubbles: true, inputType: 'insertText', data: commentText, cancelable: true }));
+            }
             commentTextArea.dispatchEvent(new Event('change', { bubbles: true }));
 
             _logger.debug('[UHelperDiscussion] handleGenericCommentSection: 已输入评论:',
@@ -1105,7 +1148,7 @@
                         resolve();
                     } else {
                         waitCount++;
-                        if (waitCount > 50) {
+                        if (waitCount > 15) {
                             _logger.error('[UHelperDiscussion] handleGenericCommentSection: 超时，按钮未激活');
                             resolve();
                         } else {
@@ -1117,13 +1160,16 @@
             });
 
             if (submitButton.disabled) {
-                setState('failed', '按钮未激活');
-                return false;
+                // 🔧 兜底：按钮未激活 → 直调 saveAnswer
+                if (!_forceSaveAnswer(commentTextArea)) {
+                    setState('failed', '按钮未激活');
+                    return false;
+                }
+            } else {
+                await sleep(500);
+                _logger.debug('[UHelperDiscussion] handleGenericCommentSection: 点击发布按钮...');
+                submitButton.click();
             }
-
-            await sleep(500);
-            _logger.debug('[UHelperDiscussion] handleGenericCommentSection: 点击发布按钮...');
-            submitButton.click();
             markCurrentDiscussionSubmitted();
             setState('submitted', '评论已提交');
             return true;
@@ -1313,6 +1359,7 @@
     }
 
     // ── 暴露全局对象 ──────────────────────────────────────────
+    console.log('[DISC-MODULE] setting window.UHelperDiscussion');
     window.UHelperDiscussion = {
         init: init,
         initPanel: initPanel,
