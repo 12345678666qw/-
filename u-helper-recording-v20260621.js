@@ -1,5 +1,6 @@
 // u-helper-recording.js — 录音/口语/虚拟麦克风模块（由主脚本 @require 加载）
 // 通过 init(ctx) 注入依赖，不直接访问主脚本变量
+// 🔧 修复版：延迟推流 + container匹配对齐
 (function (G) {
     'use strict';
 
@@ -23,6 +24,72 @@
     var isProcessingVirtualMic = false;
     var recordDuration = G.__recordDuration || 3;
 
+    // ── 🧪 测试：录音时序日志 ─────────────────────────────────
+    var _timingLog = [];
+    var _cardIndex = 0;
+    var _sentenceIndex = 0;
+
+    function _now() {
+        return Date.now();
+    }
+
+    function _timing(label, extra) {
+        var entry = { ts: _now(), label: label };
+        if (extra !== undefined) entry.extra = extra;
+        _timingLog.push(entry);
+        console.log('%c[时序] ' + label +
+            ' | ts=' + entry.ts +
+            ' | ' + new Date(entry.ts).toISOString().slice(11, 23) +
+            (extra !== undefined ? ' | ' + JSON.stringify(extra) : ''),
+            'color:#ff6600;font-size:13px;font-weight:bold;');
+    }
+
+    function _dumpTimingLog() {
+        console.log('%c========== 录音时序报告 ==========', 'color:#ff6600;font-size:16px;');
+        if (_timingLog.length === 0) {
+            console.log('(无数据)');
+            return _timingLog;
+        }
+        var base = _timingLog[0].ts;
+        var lastTs = base;
+        for (var i = 0; i < _timingLog.length; i++) {
+            var e = _timingLog[i];
+            var gap = i === 0 ? 0 : (e.ts - lastTs);
+            var abs = e.ts - base;
+            console.log(
+                '[' + String(i).padStart(3, '0') + '] ' +
+                '+' + String(abs).padStart(6, ' ') + 'ms' +
+                ' (Δ' + String(gap).padStart(5, ' ') + 'ms) ' +
+                e.label +
+                (e.extra ? ' ' + JSON.stringify(e.extra) : '')
+            );
+            lastTs = e.ts;
+        }
+        // 关键间隔汇总
+        console.log('%c── 关键间隔 ──', 'color:#ff6600;font-size:14px;');
+        for (var j = 1; j < _timingLog.length; j++) {
+            var a = _timingLog[j - 1];
+            var b = _timingLog[j];
+            if (a.label.indexOf('录音开始') !== -1 && b.label.indexOf('录音结束') !== -1) {
+                console.log('⏺ 录音时长: ' + (b.ts - a.ts) + 'ms (' + ((b.ts - a.ts) / 1000).toFixed(1) + 's)');
+            }
+            if (a.label.indexOf('录音结束') !== -1 && b.label.indexOf('录音开始') !== -1) {
+                console.log('⏸ 录音间隔: ' + (b.ts - a.ts) + 'ms (' + ((b.ts - a.ts) / 1000).toFixed(1) + 's)');
+            }
+            if (a.label.indexOf('词卡') !== -1 && a.label.indexOf('开始') !== -1 && b.label.indexOf('录音开始') !== -1) {
+                console.log('📋 词卡→录音间隔: ' + (b.ts - a.ts) + 'ms (' + ((b.ts - a.ts) / 1000).toFixed(1) + 's)');
+            }
+            if (a.label.indexOf('录音结束') !== -1 && b.label.indexOf('词卡') !== -1 && b.label.indexOf('开始') !== -1) {
+                console.log('📋 录音结束→下个词卡: ' + (b.ts - a.ts) + 'ms (' + ((b.ts - a.ts) / 1000).toFixed(1) + 's)');
+            }
+        }
+        return _timingLog;
+    }
+
+    // 挂到全局方便调试
+    G.__recordingTimingLog = _timingLog;
+    G.__dumpRecordingTiming = _dumpTimingLog;
+
     // 保持全局兼容
     G.__recordDuration = recordDuration;
 
@@ -41,7 +108,6 @@
         if (ctx && typeof ctx.safeToast === 'function') {
             ctx.safeToast(message, type, 'center');
         } else {
-            // fallback 简单 toast
             var div = document.createElement('div');
             div.className = 'u-toast u-toast-center u-toast-' + type;
             div.textContent = message;
@@ -66,21 +132,100 @@
     }
 
     // ── setupRecordingHijack ──────────────────────────────────
+    // 🔧 诊断版：patch ScriptProcessorNode 精确检测管线就绪时机
     function setupRecordingHijack() {
         if (mediaHooked) return;
         mediaHooked = true;
 
+        // ── 诊断 patch: 监听 ScriptProcessorNode 的 onaudioprocess ──
+        if (!G.__scriptProcessorPatched) {
+            G.__scriptProcessorPatched = true;
+            var _origCSP = AudioContext.prototype.createScriptProcessor;
+            AudioContext.prototype.createScriptProcessor = function (bufSize, inCh, outCh) {
+                var node = _origCSP.apply(this, arguments);
+                var _desc = Object.getOwnPropertyDescriptor(
+                    Object.getPrototypeOf(node), 'onaudioprocess'
+                ) || Object.getOwnPropertyDescriptor(node, 'onaudioprocess');
+
+                var _origOnAudioProcessSet = _desc && _desc.set;
+                var _origOnAudioProcessGet = _desc && _desc.get;
+
+                Object.defineProperty(node, 'onaudioprocess', {
+                    get: function () {
+                        return _origOnAudioProcessGet ? _origOnAudioProcessGet.call(this) : this._rawOnaudioprocess;
+                    },
+                    set: function (fn) {
+                        var ts = Date.now();
+                        console.log('[诊断] ⏱ onaudioprocess 被设置! ts=' + ts +
+                            ', 距getUserMedia=' + (G.__getUserMediaTs ? (ts - G.__getUserMediaTs) + 'ms' : 'N/A') +
+                            ', 距bufSrc.start=' + (G.__bufSrcStartTs ? (ts - G.__bufSrcStartTs) + 'ms' : 'N/A'));
+                        G.__onaudioprocessTs = ts;
+                        G.__audioPipelineReady = true;
+
+                        if (_origOnAudioProcessSet) {
+                            _origOnAudioProcessSet.call(this, fn);
+                        } else {
+                            this._rawOnaudioprocess = fn;
+                        }
+                    }
+                });
+
+                return node;
+            };
+            console.log('[诊断] ✅ ScriptProcessorNode patch 已就绪');
+        }
+
         var originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
 
         navigator.mediaDevices.getUserMedia = async function (constraints) {
+            // 🔧 强制清理：上一次录音可能没正确清理（autoStopRecording 未触发）
+            // 导致 isProcessingVirtualMic 仍为 true，后续词跳过劫持 → 真实麦克风 → 0分
+            if (isProcessingVirtualMic) {
+                console.log('[诊断] ⚠️ 检测到上一次循环残留，强制清理');
+                if (G.__currentBufSrc) {
+                    try { G.__currentBufSrc.stop(); } catch (_) {}
+                    G.__currentBufSrc = null;
+                }
+                if (G.__currentAudioCtx) {
+                    try { G.__currentAudioCtx.close(); } catch (_) {}
+                    G.__currentAudioCtx = null;
+                }
+                if (G.__bufSrcStopTimeout) {
+                    clearTimeout(G.__bufSrcStopTimeout);
+                    G.__bufSrcStopTimeout = null;
+                }
+                if (G.__bufSrcPlayTimeout) {
+                    clearTimeout(G.__bufSrcPlayTimeout);
+                    G.__bufSrcPlayTimeout = null;
+                }
+                isProcessingVirtualMic = false;
+            }
+
             if (constraints.audio && G.__autoPlayRecordEnabled && !isProcessingVirtualMic) {
                 var sampleAudio = findSampleAudio(currentRecordButton);
                 isProcessingVirtualMic = true;
 
-                // ── 方案2: 无损管道，存原始blob，不解码不重采样 ──
+                _timing('录音开始(虚拟麦克风激活)', { duration: G.__recordDuration || 3 });
+
                 var rawBlob = audioBlobCache.get(currentQuestionContainer);
+
+                if (!rawBlob) {
+                    console.log('[诊断] blob 未就绪，等待下载完成...');
+                    for (var retry = 0; retry < 6; retry++) {
+                        await _sleep(500);
+                        rawBlob = audioBlobCache.get(currentQuestionContainer);
+                        if (rawBlob) {
+                            console.log('[诊断] blob 在第 ' + (retry + 1) + ' 次重试后就绪');
+                            break;
+                        }
+                    }
+                }
+
                 if (rawBlob) {
-                    console.log('[满分管道] 方案2无损管道，原始blob大小=', rawBlob.size, 'bytes');
+                    G.__getUserMediaTs = Date.now();
+                    console.log('[诊断] ⏱ getUserMedia 触发! ts=' + G.__getUserMediaTs +
+                        ', blob大小=' + rawBlob.size + 'bytes');
+
                     var audioCtx2 = new (window.AudioContext || window.webkitAudioContext)();
                     var arrayBuf = await rawBlob.arrayBuffer();
                     var audioBuf = await audioCtx2.decodeAudioData(arrayBuf);
@@ -90,31 +235,90 @@
                     var dest2 = audioCtx2.createMediaStreamDestination();
                     bufSrc.connect(dest2);
 
-                    // 立即开始推流，无延迟
+                    // ── 🎯 优化策略：固定延迟单次播放 ──────────────────────
+                    // 词汇录音页面用 MediaRecorder + WebSocket，不用 ScriptProcessor，
+                    // 所以 onaudioprocess 检测不到。改用经验值 1.5s 固定延迟。
+                    //
+                    // 旧 loop 方案问题：0.7s 单词重复 6-9 遍破坏音素对齐。
+                    //
+                    // 新方案：延迟 1.5s（管线启动）→ 单次播放 → 播完后停止。
+                    // 录音器捕获: [静音1.5s] + [单词1遍] + [静音]
                     bufSrc.loop = false;
-                    bufSrc.start(0);
-                    console.log('[满分管道] 方案2无损推流开始，buf时长=', audioBuf.duration.toFixed(2), 's');
+                    var _bufDuration = audioBuf.duration;
+                    var _pipelineDelayMs = G.__pipelineSetupMs || 1500;
+                    G.__bufSrcStartTs = Date.now();
+                    G.__currentBufSrc = bufSrc;
+                    G.__currentAudioCtx = audioCtx2;
+                    G.__bufDuration = _bufDuration;
 
-                    var dur2 = (audioBuf.duration * 1000) + 1500;
-                    setTimeout(function () {
-                        bufSrc.stop();
-                        autoStopRecording();
-                        isProcessingVirtualMic = false;
-                        audioCtx2.close();
-                    }, dur2);
+                    console.log('[诊断] ⏱ 固定延迟单次播放 | buf=' + _bufDuration.toFixed(3) +
+                        's | ' + (_pipelineDelayMs / 1000).toFixed(1) + 's 后开始播放');
+
+                    // 延迟后单次播放
+                    var _playTimeoutId = setTimeout(function () {
+                        _timing('音频播放开始(固定延迟)', { delayMs: _pipelineDelayMs, bufDuration: _bufDuration.toFixed(3) });
+                        console.log('[诊断] ⏱ 延迟' + (_pipelineDelayMs / 1000).toFixed(1) + 's 到，开始单次播放');
+                        bufSrc.start(0);
+
+                        // 播完后 1.5s 自动停止
+                        var _stopAfterMs = _bufDuration * 1000 + 1500;
+                        G.__bufSrcStopTimeout = setTimeout(function () {
+                            console.log('[诊断] ⏱ 单次播放+余量完成，触发停止');
+                            _timing('音频播放完成(单次)');
+                            autoStopRecording();
+                        }, _stopAfterMs);
+                    }, _pipelineDelayMs);
+                    G.__bufSrcPlayTimeout = _playTimeoutId;
 
                     return dest2.stream;
                 }
 
+                console.log('[诊断] blob 最终未就绪，回退真实麦克风');
                 isProcessingVirtualMic = false;
             }
             return originalGetUserMedia(constraints);
         };
     }
 
+    // ── _getAudioDurationFromCache ─────────────────────────────
+    // 🎯 从多处来源获取音频时长（优先 G.__bufDuration，其次 URL #duration=）
+    function _getAudioDurationFromCache() {
+        // 来源1：最近一次 getUserMedia 的 audioBuf.duration（最准确）
+        if (G.__bufDuration && G.__bufDuration > 0) return G.__bufDuration;
+
+        // 来源2：从 sample audio URL 的 #duration= 参数提取
+        if (currentRecordButton) {
+            var _sa = findSampleAudio(currentRecordButton);
+            if (_sa && _sa.src) {
+                var _m = _sa.src.match(/[#&?]duration=([\d.]+)/i);
+                if (_m) {
+                    var _d = parseFloat(_m[1]);
+                    if (_d > 0) return _d;
+                }
+            }
+        }
+
+        // 来源3：全局设置
+        return G.__recordDuration || 3;
+    }
+
     // ── downloadAndSaveAudio ──────────────────────────────────
+    // 🔧 修复3：container 匹配与 monitorRecordButton 对齐，加入 vocContainer / layoutBody-container
     async function downloadAndSaveAudio(audioUrl, recordButton) {
         try {
+            // 🎧 满分回放：查自建服务器是否有高分数录音
+            var word = '';
+            try {
+                var _m = audioUrl.match(/name=([^&]+)\.mp3/);
+                if (_m) word = decodeURIComponent(_m[1]).replace(/^\d+_/, '').toLowerCase();
+            } catch(_) {}
+            if (word && typeof window._tryServerAudio === 'function') {
+                var _serverUrl = await window._tryServerAudio(word);
+                if (_serverUrl) {
+                    console.log('[自动播放录制器] 🎧 替换为服务器满分录音:', _serverUrl);
+                    audioUrl = _serverUrl;
+                }
+            }
             console.log('[自动播放录制器] 下载示例音频:', audioUrl);
             var blob = await fetch(audioUrl).then(function(r) { return r.blob(); });
             var wavBlob = await convertToWAV(blob);
@@ -123,13 +327,18 @@
             recordedAudioUrl = URL.createObjectURL(wavBlob);
 
             if (recordButton) {
+                // 🔧 修复3：与 monitorRecordButton 里的 currentQuestionContainer 选择器完全对齐
                 var questionContainer = recordButton.closest('.oral-study-sentence') ||
                                         recordButton.closest('.question-common-abs-reply') ||
-                                        recordButton.closest('.question-vocabulary');
+                                        recordButton.closest('.question-vocabulary') ||
+                                        recordButton.closest('.vocContainer') ||
+                                        recordButton.closest('.layoutBody-container.has-reply');
                 if (questionContainer) {
                     audioCache.set(questionContainer, recordedAudioUrl);
                     // 🔧 方案2: 存原始blob（不解码不重采样），getUserMedia里直接用
                     audioBlobCache.set(questionContainer, blob);
+                    // 同时挂到全局，方便调试
+                    G.__audioBlobForCurrentQuestion = blob;
                     console.log('[自动播放录制器] ✅ 音频已保存（原始blob=' + blob.size + 'bytes, 供方案2使用）');
                 }
             }
@@ -170,7 +379,6 @@
     }
 
     // ── resampleAudio ─────────────────────────────────────────
-    // 旧版线性插值重采样（保留作为离线渲染不可用时的fallback）
     function resampleAudio(audioData, fromSampleRate, toSampleRate) {
         if (fromSampleRate === toSampleRate) return audioData;
 
@@ -194,7 +402,6 @@
     }
 
     // ── resampleAudioHQ ────────────────────────────────────────
-    // 使用浏览器内置 OfflineAudioContext 做高质量重采样，避免线性插值损失音质
     async function resampleAudioHQ(channelData, fromSampleRate, toSampleRate) {
         if (fromSampleRate === toSampleRate) return channelData;
 
@@ -402,6 +609,7 @@
                                            recordIcon.closest('.question-vocabulary') ||
                                            recordIcon.closest('.vocContainer') ||
                                            recordIcon.closest('.layoutBody-container.has-reply');
+                _timing('录音按钮点击', { container: currentQuestionContainer ? currentQuestionContainer.className : 'none' });
                 console.log('[自动播放录制器] 检测到录音按钮点击');
 
                 if (G.__autoPlayRecordEnabled) {
@@ -417,6 +625,8 @@
             }
         }, true);
     }
+
+    // ── 以下所有函数保持不变 ─────────────────────────────────
 
     // ── monitorReplayAudio ────────────────────────────────────
     function monitorReplayAudio() {
@@ -539,18 +749,44 @@
     }
 
     // ── autoStopRecording ─────────────────────────────────────
+    // ⚠️ 关键顺序：必须先在 AudioContext 活着时点停止按钮，再清理音频资源
+    // 如果先关 AudioContext → MediaStream 死掉 → 录音器收到空数据 → 0 分
     function autoStopRecording() {
+        _timing('录音结束(停止按钮)', { isProcessingVirtualMic: isProcessingVirtualMic });
         var recordingButton = document.querySelector('.record-icon.recording, .button-record.recording, .record-fill-icon.recording');
 
+        // 1️⃣ 先在流还活着的时候点停止按钮
         if (recordingButton) {
             recordingButton.dataset.autoStopped = 'true';
-            console.log('[停止] 触发点击停止录音');
+            console.log('[停止] 触发点击停止录音 (AudioContext 仍存活)');
             recordingButton.click();
         }
+
+        // 2️⃣ 再清理音频资源（此时录音器已正常收尾）
+        if (G.__bufSrcStopTimeout) {
+            clearTimeout(G.__bufSrcStopTimeout);
+            G.__bufSrcStopTimeout = null;
+        }
+        if (G.__bufSrcPlayTimeout) {
+            clearTimeout(G.__bufSrcPlayTimeout);
+            G.__bufSrcPlayTimeout = null;
+        }
+        if (G.__currentBufSrc) {
+            try { G.__currentBufSrc.stop(); } catch (_) {}
+            G.__currentBufSrc = null;
+            console.log('[诊断] ⏱ 停止音频源');
+        }
+        if (G.__currentAudioCtx) {
+            try { G.__currentAudioCtx.close(); } catch (_) {}
+            G.__currentAudioCtx = null;
+        }
+        isProcessingVirtualMic = false;
     }
 
     // ── handleVocabularyRecording ─────────────────────────────
     async function handleVocabularyRecording() {
+        _cardIndex++;
+        _timing('词卡' + _cardIndex + ' 开始(词汇录音)', { cardIndex: _cardIndex });
         console.log('[挂机录音] 开始检测词汇卡片录音按钮...');
 
         var sleep = getSleep();
@@ -565,7 +801,6 @@
         try {
             recordButton.setAttribute('data-auto-handled', 'true');
 
-            // 🔧 预下载：在点击录音按钮前先把音频缓存好，确保getUserMedia时blob已就绪
             var _sampleAudio = findSampleAudio(recordButton);
             if (_sampleAudio && _sampleAudio.src) {
                 await downloadAndSaveAudio(_sampleAudio.src, recordButton);
@@ -574,8 +809,12 @@
             showRecordNotification('🎤 词汇录音开始...', 'info');
             recordButton.click();
 
-            var settingDuration = G.__recordDuration || 3;
-            var totalWaitTime = (settingDuration * 1000) + 1500;
+            // 🎯 自适应停止：延迟1.5s(管线) + 音频播放 + 自动停止余量1.5s + 安全边距1s
+            var _audioDuration = _getAudioDurationFromCache() || (G.__bufDuration || (G.__recordDuration || 3));
+            // 等待: getUserMedia延迟(~0.5s) + 固定播放延迟(~1.5s) + 音频 + autoStop余量(~1.5s) + 安全边距(~1s)
+            var totalWaitTime = 500 + 1500 + (_audioDuration * 1000) + 1500 + 1000;
+            console.log('[挂机录音] ⏱ 自适应等待 ' + (totalWaitTime / 1000).toFixed(1) +
+                's (音频=' + _audioDuration.toFixed(2) + 's, 延迟1.5s+播放+余量1.5s+安全1s)');
             await sleep(totalWaitTime);
 
             recordButton.click();
@@ -650,6 +889,11 @@
 
             try {
                 recordButton.setAttribute('data-auto-handled', 'true');
+                _sentenceIndex++;
+                _timing('句子' + _sentenceIndex + ' 开始(跟读) 第' + (i + 1) + '/' + sentenceContainers.length + '句', {
+                    sentenceIndex: _sentenceIndex,
+                    totalSentences: sentenceContainers.length
+                });
                 console.log('[挂机录音] ➤ 处理第 ' + (i + 1) + ' 句');
 
                 await processSentenceRecording(recordButton, sentenceContainer, i + 1);
@@ -694,7 +938,8 @@
                 }
 
                 var baseTime = targetDuration > 0 ? targetDuration : (G.__recordDuration || 3);
-                var waitTimeMs = (baseTime * 1000) + 1500;
+                // 管线就绪(~1.5s) + 音频播放 + 余量(~2s)
+                var waitTimeMs = 1500 + (baseTime * 1000) + 2000;
 
                 console.log('[挂机录音] ⏺ 第 ' + sentenceIndex + ' 句：点击开始');
                 recordButton.click();
@@ -935,7 +1180,6 @@
         info.startButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
         await sleep(500);
 
-        // 点击 start
         var opts = { bubbles: true, cancelable: true };
         info.startButton.dispatchEvent(new MouseEvent('mouseover', opts));
         info.startButton.dispatchEvent(new MouseEvent('mousedown', opts));
@@ -944,14 +1188,15 @@
 
         console.log('[录音] OralAloud 已点击 start，等待准备倒计时');
 
-        // 等准备倒计时结束
+        _timing('短文朗读: 开始等待准备倒计时', { prepareSec: times.prepareSec, readSec: times.readSec });
         await waitOralAloudPrepareFinished(times.prepareSec);
 
+        _timing('短文朗读: 准备结束，开始录音阶段');
         console.log('[录音] OralAloud 准备时间结束，等待朗读录音完成');
 
-        // 等朗读录音时间
         await waitOralAloudRecordingFinished(times.readSec);
 
+        _timing('短文朗读: 录音结束，等待评分');
         console.log('[录音] OralAloud 录音时间结束，等待上传/评分');
 
         var assessed = await waitOralAloudAssessment(info, 30000);
@@ -972,12 +1217,10 @@
         while (Date.now() - start < maxWait) {
             var text = document.body.innerText || '';
 
-            // 如果页面出现 recording / 正在录音 / 上传 等状态，说明准备阶段已结束
             if (/record|recording|录音中|正在录音|upload|上传/i.test(text)) {
                 return true;
             }
 
-            // 如果遮罩消失，也可能说明开始进入录音
             var mask = document.querySelector('.p-oral-aloud-mask');
             if (!mask) {
                 return true;
@@ -996,18 +1239,15 @@
         var minWait = Math.max(10, readSec - 5) * 1000;
         var maxWait = (readSec + 20) * 1000;
 
-        // 至少等到接近朗读时间
         await sleep(minWait);
 
         while (Date.now() - start < maxWait) {
             var text = document.body.innerText || '';
 
-            // 如果出现上传、评测、完成，说明录音阶段结束
             if (/upload|uploading|上传|评测中|评分中|正在评测|finish|完成/i.test(text)) {
                 return true;
             }
 
-            // 如果页面有停止/结束按钮，可以点击一次
             var stopBtn = findOralAloudStopButton();
             if (stopBtn) {
                 console.log('[录音] OralAloud 找到停止按钮，点击结束录音');
@@ -1084,7 +1324,6 @@
         ).length > 0;
     }
 
-    // ── isRealDiscussionPageForRecordingSkip ──────────────────
     // ── isOralPersonalStatePage ─────────────────────────────
     function isOralPersonalStatePage() {
         return !!(
@@ -1295,22 +1534,20 @@
         info.recordButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
         await sleep(500);
 
-        // 如果页面有题目音频，先播放
         if (info.audioEl && info.audioSrc) {
             await tryPlayQuestionAudio(info.audioEl, info.audioSrc);
         }
 
         await sleep(500);
 
-        // 点击开始录音
         console.log('[录音] OralPersonalState 点击开始录音');
+        _timing('个人问答: 点击开始录音', { recordSec: recordSec });
         safeRecordClick(info.recordButton);
 
-        // 等待录音倒计时
         await sleep((recordSec + 1 + Math.random()) * 1000);
 
-        // 如果仍在录音，点击停止
         if (isRecordingButtonActive(info.recordButton) || /结束录音|录音中|正在录音/.test(document.body.innerText || '')) {
+            _timing('个人问答: 点击停止录音');
             console.log('[录音] OralPersonalState 点击停止录音');
             safeRecordClick(info.recordButton);
         }
@@ -1325,7 +1562,6 @@
     }
 
     function isRealDiscussionPageForRecordingSkip() {
-        // 明确录音题，绝不当讨论区
         if (isOralAloudPage()) return false;
         if (isOralPersonalStatePage && isOralPersonalStatePage()) return false;
         if (isSentenceRecitationPage()) return false;
@@ -1346,7 +1582,6 @@
             document.querySelector('textarea[placeholder*="发表"]')
         );
 
-        // 必须同时有讨论容器和评论输入框，才认为是真讨论页
         return hasDiscussionRoot && hasDiscussionTextarea;
     }
 
@@ -1371,7 +1606,6 @@
                 return false;
             }
 
-            // 排除非录音按钮的 record 相关元素
             if (btn.closest('.record-button-wrap') ||
                 btn.closest('.audio-origin') ||
                 btn.closest('.question-audio') ||
@@ -1423,6 +1657,13 @@
 
             recordButton.setAttribute('data-auto-handled', 'true');
 
+            _cardIndex++;
+            _timing('词卡' + _cardIndex + ' 开始(通用录音) 第' + (i + 1) + '/' + validRecordButtons.length + '题', {
+                cardIndex: _cardIndex,
+                totalCards: validRecordButtons.length,
+                questionIndex: i
+            });
+
             console.log('[挂机录音] 处理第 ' + (i + 1) + '/' + validRecordButtons.length + ' 个录音题');
 
             try {
@@ -1458,6 +1699,10 @@
 
     // ── handleRecordingQuestions ──────────────────────────────
     async function handleRecordingQuestions() {
+        _cardIndex = 0;
+        _sentenceIndex = 0;
+        _timingLog = [];
+        _timing('会话开始(handleRecordingQuestions)', { url: window.location.href });
         console.log('[挂机录音] 开始检测录音题...');
 
         var sleep = getSleep();
@@ -1468,42 +1713,52 @@
         }
 
         if (document.querySelector('.record-seat')) {
+            _timing('进入角色扮演模式');
             return await handleRolePlayExercise();
         }
 
-        // OralAloud 短文朗读题，优先处理
         if (isOralAloudPage()) {
+            _timing('进入短文朗读模式');
             console.log('[挂机录音] 命中 OralAloud 短文朗读题，优先处理');
-            return await handleOralAloudExercise();
+            var _result = await handleOralAloudExercise();
+            _timing('会话结束(短文朗读)', { result: _result });
+            return _result;
         }
 
-        // OralPersonalState 问答录音题
         if (isOralPersonalStatePage()) {
+            _timing('进入个人问答模式');
             console.log('[挂机录音] 命中 OralPersonalState 问答录音题');
-            return await handleOralPersonalStateExercise();
+            var _result2 = await handleOralPersonalStateExercise();
+            _timing('会话结束(个人问答)', { result: _result2 });
+            return _result2;
         }
 
-        // 重点：句子跟读题必须放在讨论区判断之前
         if (isSentenceRecitationPage()) {
+            _timing('进入句子跟读模式');
             console.log('[挂机录音] 命中句子跟读录音题，优先处理');
             var containers = document.querySelectorAll('.oral-study-sentence');
             console.log('[挂机录音] 检测到句子跟读数量: ' + containers.length);
-            return await handleSentenceRecitationExercise();
+            var _result3 = await handleSentenceRecitationExercise();
+            _timing('会话结束(句子跟读)', { result: _result3 });
+            return _result3;
         }
 
-        // 只有确认不是录音题后，才允许讨论区跳过
         if (isRealDiscussionPageForRecordingSkip()) {
+            _timing('跳过(讨论页面)');
             console.log('[挂机录音] 检测到真实讨论/评论页面，跳过录音题检测。');
             return false;
         }
 
-        // 通用录音按钮扫描
-        return await handleGenericRecordingButtons();
+        var _result4 = await handleGenericRecordingButtons();
+        _timing('会话结束(通用录音)', { result: _result4, totalCards: _cardIndex });
+        return _result4;
     }
 
     // ── processRecordingQuestion ──────────────────────────────
     async function processRecordingQuestion(recordButton) {
         var sleep = getSleep();
+
+        _timing('processRecordingQuestion 开始', { cardIndex: _cardIndex });
 
         return new Promise(async function (resolve) {
             try {
@@ -1562,9 +1817,10 @@
                             });
                             tempAudio.load();
                         } else {
-                            var recDuration = G.__recordDuration || 3;
-                            var defaultTime = recDuration * 1000;
-                            console.log('[挂机录音] 强制录音模式，固定时长: ' + recDuration + 's');
+                            var _audioDur = _getAudioDurationFromCache();
+                            // 延迟1.5s + 音频 + 余量1.5s + 安全1s
+                            var defaultTime = 1500 + (_audioDur * 1000) + 1500 + 1000;
+                            console.log('[挂机录音] 强制录音模式，自适应时长: ' + (_audioDur).toFixed(2) + 's (等待' + (defaultTime/1000).toFixed(1) + 's)');
                             timeoutId = setTimeout(function () { finishRecording(); }, defaultTime);
                         }
                     }
@@ -1572,6 +1828,7 @@
 
                 var finishRecording = function () {
                     if (!recordingFinished) {
+                        _timing('finishRecording 触发(自动停止)');
                         console.log('[挂机录音] ⏹️ 自动停止录音');
                         recordButton.click();
                         recordingFinished = true;
@@ -1646,7 +1903,10 @@
             audioCacheSize: audioCache.size,
             audioBlobCacheSize: audioBlobCache.size,
             isProcessingVirtualMic: isProcessingVirtualMic,
-            recordDuration: recordDuration
+            recordDuration: recordDuration,
+            timingLogLength: _timingLog.length,
+            cardIndex: _cardIndex,
+            sentenceIndex: _sentenceIndex
         };
     }
 
@@ -1656,7 +1916,6 @@
             ctx = injectedCtx || {};
             console.log('[UHelperRecording] 已初始化');
 
-            // debug 模式下暴露调试函数
             if (ctx && ctx.debug) {
                 window.debugOralPersonalState = function () {
                     var info = getOralPersonalStateInfo();
@@ -1704,7 +1963,11 @@
         waitForScoreAppear: waitForScoreAppear,
         safeRecordClick: safeRecordClick,
         parseTimeTextToSeconds: parseTimeTextToSeconds,
-        getState: getState
+        getState: getState,
+        // 🧪 测试：时序日志
+        dumpTimingLog: _dumpTimingLog,
+        getTimingLog: function () { return _timingLog; },
+        resetTimingLog: function () { _timingLog = []; _cardIndex = 0; _sentenceIndex = 0; }
     };
 
 })(window);
